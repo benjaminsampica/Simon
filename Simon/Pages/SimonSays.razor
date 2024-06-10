@@ -1,0 +1,190 @@
+﻿@using System.Timers
+@implements IDisposable
+
+@if (!_gameHasStarted)
+{
+    <div class="alert alert-warning">
+        Game will start in 5 seconds.
+    </div>
+}
+else
+{
+    <div class="container">
+        <div class="row">
+            <div class="col-12">
+                <h1>Round @(_gameId + 1)</h1>
+            </div>
+            <div class="col-12">
+                @if (_waitingForPlayerInput)
+                {
+                    <div class="alert alert-info">
+                        Click on the highlighted images and recreate the pattern.
+                    </div>
+                }
+                @if (_hasLost)
+                {
+                    <div class="alert alert-danger">
+                        You lose. Refresh to try again.
+                    </div>
+                }
+                @if (_hasWon)
+                {
+                    <div class="alert alert-success">
+                        You win!
+                    </div>
+                }
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-2">
+                <img src="./1.png" class="img-fluid mb-2" @onclick="() => OnImageClickedAsync(0)" />
+            </div>
+            <div class="col-2">
+                <img src="./2.png" class="img-fluid mb-2" @onclick="() => OnImageClickedAsync(1)" />
+            </div>
+            <div class="col-2">
+                <img src="./3.png" class="img-fluid mb-2" @onclick="() => OnImageClickedAsync(2)" />
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-2">
+                <img src="./4.png" class="img-fluid mb-2" @onclick="() => OnImageClickedAsync(3)" />
+            </div>
+            <div class="col-2">
+                <img src="./5.png" class="img-fluid mb-2" @onclick="() => OnImageClickedAsync(4)" />
+            </div>
+            <div class="col-2">
+                <img src="./6.png" class="img-fluid mb-2" @onclick="() => OnImageClickedAsync(5)" />
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-2">
+                <img src="./7.png" class="img-fluid mb-2" @onclick="() => OnImageClickedAsync(6)" />
+            </div>
+            <div class="col-2">
+                <img src="./8.png" class="img-fluid mb-2" @onclick="() => OnImageClickedAsync(7)" />
+            </div>
+            <div class="col-2">
+                <img src="./9.png" class="img-fluid mb-2" @onclick="() => OnImageClickedAsync(8)" />
+            </div>
+        </div>
+    </div>
+}
+
+@code
+{
+    [Inject] IJSRuntime JSRuntime { get; set; } = null!;
+    [Parameter, EditorRequired] public Dictionary<int, int[]> Games { get; set; } = null!;
+    [Parameter, EditorRequired] public int MillisecondsDelay { get; set; }
+
+    private Timer _gameStartTimer = new();
+    private Timer _innerLoopTimer = new();
+    private bool _hasLost;
+    private bool _hasWon;
+    private bool _gameHasStarted;
+    private bool _waitingForPlayerInput;
+    private int _gameId;
+    private int _currentRoundImageIndex;
+    private static List<int> Inputs = new();
+
+    protected override void OnInitialized()
+    {
+        _gameId = 0;
+        _gameStartTimer.Interval = 5000;
+        _gameStartTimer.Elapsed += (object? sender, ElapsedEventArgs e) =>
+        {
+            _gameStartTimer.Stop();
+            _gameHasStarted = true;
+            StateHasChanged();
+            StartGame();
+        };
+        _gameStartTimer.Start();
+    }
+
+    public void Dispose()
+    {
+        _gameStartTimer.Dispose();
+        _innerLoopTimer.Dispose();
+    }
+
+    private void StartGame()
+    {
+        ResetRoundTimer();
+    }
+
+    private void ResetRoundTimer()
+    {
+        _innerLoopTimer = new();
+        _innerLoopTimer.Interval = MillisecondsDelay;
+        _innerLoopTimer.Start();
+        _innerLoopTimer.Elapsed += async (object? sender, ElapsedEventArgs e) =>
+        {
+            try
+            {
+                var currentImageIndex = (int)Games[_gameId].GetValue(_currentRoundImageIndex)!;
+                await JSRuntime.InvokeVoidAsync("setSelectedImage", currentImageIndex);
+                StateHasChanged();
+                await Task.Delay(MillisecondsDelay / 2);
+                await JSRuntime.InvokeVoidAsync("unsetSelectedImage", currentImageIndex);
+
+                _currentRoundImageIndex++;
+
+                if (_currentRoundImageIndex >= Games[_gameId].Length)
+                {
+                    _innerLoopTimer.Stop();
+                    _waitingForPlayerInput = true;
+                    StateHasChanged();
+                }
+            }
+            catch(KeyNotFoundException)
+            {
+                _hasWon = true;
+                StateHasChanged();
+            }
+        };
+    }
+
+    private async Task OnImageClickedAsync(int position)
+    {
+        Inputs.Add(position);
+        await JSRuntime.InvokeVoidAsync("setSelectedImage", position);
+
+        SetHasLost();
+
+        if (!_hasLost)
+        {
+            await CheckIfRoundWasWonAsync();
+        }
+    }
+
+    private void SetHasLost()
+    {
+        var inputsWithIndexes = Inputs.Select((v, i) => (v, i));
+        foreach (var input in inputsWithIndexes)
+        {
+            var game = Games[_gameId];
+
+            _hasLost = game[input.i] != input.v;
+        }
+    }
+
+    private async Task CheckIfRoundWasWonAsync()
+    {
+        var game = Games[_gameId];
+
+        if (game.Length == Inputs.Count)
+        {
+            _gameId++;
+            _currentRoundImageIndex = 0;
+            _waitingForPlayerInput = false;
+            Inputs.Clear();
+
+            for(int i = 0; i <= 10; i++)
+            {
+                await JSRuntime.InvokeVoidAsync("unsetSelectedImage", i);
+            }
+
+            ResetRoundTimer();
+        }
+    }
+}
